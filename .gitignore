@@ -6,6 +6,8 @@
 !/assets/
 !/docs/
 !/scripts/
+!/.vscode/
+!/notebooks/
 
 # Ignore Python cache files
 __pycache__/
@@ -16,6 +18,7 @@ __pycache__/
 
 # Track key docs
 !README.md
+!COLAB_VSCODE.md
 !LICENSE
 !.gitignore
 
