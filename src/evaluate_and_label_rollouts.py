@@ -42,10 +42,24 @@ DEFAULTS = {
 }
 
 GRADER_SYSTEM_PROMPT = (
-    "You are a strict mathematical answer-equivalence grader. "
-    "Compare the proposed solution with the verified answer. "
-    "Output exactly `Yes.` if they are equivalent and `No.` otherwise. "
-    "Do not explain your reasoning."
+    "This is a binary classification task, not a problem-solving task. "
+    "Compare the proposed solution's final answer with the verified answer. "
+    "Your entire response must be exactly one label: `Yes.` or `No.` "
+    "The first character must be `Y` or `N`. "
+    "Do not solve the problem, repeat either answer, or explain your decision."
+)
+
+GRADER_FORMAT_EXAMPLES = (
+    (
+        "Verified answer: 12\nProposed solution's final answer: 12\n"
+        "Output exactly Yes. or No.",
+        "Yes.",
+    ),
+    (
+        "Verified answer: 12\nProposed solution's final answer: 13\n"
+        "Output exactly Yes. or No.",
+        "No.",
+    ),
 )
 
 
@@ -71,22 +85,55 @@ def apply_hf_chat(
             return user_content
         return f"{system_content}\n\n{user_content}"
 
+
+def apply_grader_chat(tokenizer, user_content: str) -> str:
+    """Build a grader chat with short demonstrations of the required format."""
+    messages = [{"role": "system", "content": GRADER_SYSTEM_PROMPT}]
+    for example_prompt, example_answer in GRADER_FORMAT_EXAMPLES:
+        messages.extend(
+            (
+                {"role": "user", "content": example_prompt},
+                {"role": "assistant", "content": example_answer},
+            )
+        )
+    messages.append({"role": "user", "content": user_content})
+
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+    except Exception:
+        fallback_messages = [
+            GRADER_SYSTEM_PROMPT,
+            *(
+                f"User:\n{prompt}\nAssistant:\n{answer}"
+                for prompt, answer in GRADER_FORMAT_EXAMPLES
+            ),
+            f"User:\n{user_content}\nAssistant:\n",
+        ]
+        return "\n\n".join(fallback_messages)
+
+
 def extract_response(response: str, token: str) -> str:
     """Extract response after thinking token if present."""
     return response[response.rfind(token) + len(token):].strip() if token in response else response.strip()
 
+
 def get_eval_prompt(prompt: str, response: str, answer: str, thinking_token: str) -> str:
     """Craft the grading prompt for the eval model (correctness w/ gold answer)."""
     return (
-        "Determine whether the proposed solution gives an answer equivalent "
-        "to the verified answer.\n\n"
+        "BINARY CLASSIFICATION. Do not solve or summarize the problem.\n"
+        "Use `Yes.` only if the proposed solution's final answer is equivalent "
+        "to the verified answer; otherwise use `No.`\n\n"
         f"Question:\n{prompt}\n\n"
         f"Verified answer:\n{answer}\n\n"
         "Proposed solution:\n"
         f"{extract_response(response, thinking_token)}\n\n"
-        "Output exactly one of:\n"
-        "Yes.\n"
-        "No."
+        "Do not continue the solution and do not explain.\n"
+        "Your entire response must now be exactly `Yes.` or `No.`"
     )
 
 
@@ -215,11 +262,7 @@ def main() -> None:
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
     ):
         prompt_text = get_eval_prompt(row["prompt"], row["response"], row.get("answer", ""), args.thinking_token)
-        chat_input = apply_hf_chat(
-            tokenizer,
-            prompt_text,
-            system_content=GRADER_SYSTEM_PROMPT,
-        )
+        chat_input = apply_grader_chat(tokenizer, prompt_text)
 
         prompt_length = len(tokenizer(chat_input).input_ids)
         if prompt_length > args.max_model_len:
@@ -242,7 +285,12 @@ def main() -> None:
         with persistent_vllm_progress():
             generations = llm.generate(
                 inputs,
-                SamplingParams(max_tokens=16, temperature=0.0, top_k=1),
+                SamplingParams(
+                    max_tokens=16,
+                    temperature=0.0,
+                    top_k=1,
+                    stop=["\n"],
+                ),
                 use_tqdm=True,
             )
         elapsed = time.perf_counter() - start
