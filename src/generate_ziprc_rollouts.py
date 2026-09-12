@@ -207,7 +207,7 @@ def worker(
 
     # 6) Generate
     start = time.perf_counter()
-    generations = list(llm.generate(inputs, sampling))
+    generations = list(llm.generate(inputs, sampling, use_tqdm=True))
     elapsed = time.perf_counter() - start
 
     # 7) Build rows

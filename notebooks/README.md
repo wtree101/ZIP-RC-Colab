@@ -16,6 +16,8 @@ These notebooks implement the 0.6B experiment in `reference/plan.md`. The human-
 
 The default profile targets one RTX 3090 or Colab L4 with Qwen3-0.6B, BF16, a 4,096-token context, and a 2,048-token output cap. Edit the configuration cell in notebook 00 before running later stages.
 
+Long-running rollout, grading, training, scoring, and evaluation commands display completed/total work, elapsed time, and estimated remaining time. The estimate starts after the first measurable batch and becomes more stable after warm-up; initial model downloads and CUDA/vLLM startup are reported in the command's final elapsed time but cannot be predicted accurately in advance.
+
 For Colab Enterprise, use the generated files in `notebooks/colab_enterprise/`. Choose the all-in-one file or the standalone Step 00–08 files. They fix the remote repository at `/content/ZIP-RC-Colab` and route model commands through `/content/mamba/envs/zip/bin/python`, while keeping visualization cells in the normal Colab kernel.
 
 Notebook 07 is explicitly an offline counterfactual proxy because the released repository does not include the paper's online adaptive meta-action sampler. Treat its Pareto curve as a signal for whether implementing the online controller is worthwhile, not as a paper reproduction.

@@ -95,7 +95,7 @@ env_check = subprocess.run(
         "-c",
         (
             "import importlib.util, json; "
-            "mods=['torch','vllm','transformers','datasets','pandas','pyarrow']; "
+            "mods=['torch','vllm','transformers','datasets','pandas','pyarrow','tqdm']; "
             "print(json.dumps([m for m in mods if importlib.util.find_spec(m) is None]))"
         ),
     ],

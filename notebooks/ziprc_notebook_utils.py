@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TypedDict
@@ -52,7 +53,12 @@ def run_repo(repo: Path, *args: object) -> None:
     if python_executable and command and command[0] in {"python", "python3"}:
         command[0] = python_executable
     print("Running:", " ".join(command), flush=True)
-    subprocess.run(command, cwd=repo, check=True)
+    started = time.perf_counter()
+    try:
+        subprocess.run(command, cwd=repo, check=True)
+    finally:
+        elapsed = time.perf_counter() - started
+        print(f"Command elapsed time: {elapsed / 60:.1f} minutes", flush=True)
 
 
 def require_columns(frame: pd.DataFrame, columns: Iterable[str]) -> list[str]:

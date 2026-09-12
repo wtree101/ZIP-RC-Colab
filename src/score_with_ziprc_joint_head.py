@@ -29,6 +29,7 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from transformers import AutoModelForCausalLM
+from tqdm.auto import tqdm
 
 # ---------------------------
 # Utilities
@@ -265,8 +266,16 @@ def worker(rank: int, world_size: int, args):
     t0 = time.time()
     seen = 0
 
+    progress = tqdm(
+        total=len(loader),
+        desc="Score trajectories",
+        unit="batch",
+        dynamic_ncols=True,
+        disable=rank != 0,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
+    )
     with torch.inference_mode():
-        for step, batch in enumerate(loader):
+        for batch in loader:
             input_ids = batch["input_ids"].to(device)  # [B, S]
             outputs = model(input_ids=input_ids, output_hidden_states=True, use_cache=False)
             h_last = outputs.hidden_states[-1]  # [B, S, E]
@@ -287,10 +296,9 @@ def worker(rank: int, world_size: int, args):
                 shard_rows.append((int(ridx), (None if (v != v) else float(max(0.0, min(1.0, v))))))
 
             seen += len(vals)
-            if step % max(1, args.log_every) == 0:
-                elapsed = time.time() - t0
-                rate = seen / max(1e-9, elapsed)
-                print(f"[rank {rank}] processed {seen} rows  ({rate:.1f} rows/s)", flush=True)
+            progress.update(1)
+            progress.set_postfix(rows=seen, refresh=False)
+    progress.close()
 
     # Clean up resources before barrier to reduce CUDA activity
     del loader
@@ -368,7 +376,12 @@ def parse_args():
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], default="bfloat16")
     p.add_argument("--pos-chunk-size", type=int, default=512, help="Chunk size for per-position logits.")
-    p.add_argument("--log-every", type=int, default=25)
+    p.add_argument(
+        "--log-every",
+        type=int,
+        default=25,
+        help="Deprecated compatibility option; the progress bar updates automatically.",
+    )
     return p.parse_args()
 
 

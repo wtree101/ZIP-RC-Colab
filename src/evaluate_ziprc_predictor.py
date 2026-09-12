@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
+from tqdm.auto import tqdm
 
 LENGTH_EDGES = np.array([0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768])
 
@@ -50,7 +51,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress-points", type=float, nargs="+", default=[0.25, 0.5, 0.75, 1.0])
     parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], default="bfloat16")
-    parser.add_argument("--log-every", type=int, default=25)
+    parser.add_argument(
+        "--log-every",
+        type=int,
+        default=25,
+        help="Deprecated compatibility option; the progress bar updates automatically.",
+    )
     return parser.parse_args()
 
 
@@ -97,7 +103,14 @@ def main() -> None:
 
     rows: list[dict[str, object]] = []
     with torch.inference_mode():
-        for row_index, row in source.iterrows():
+        for row_index, row in tqdm(
+            source.iterrows(),
+            total=len(source),
+            desc="Evaluate predictor",
+            unit="trajectory",
+            dynamic_ncols=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
+        ):
             input_ids = as_int_list(row["input_ids"])[:-1][: args.max_length]
             label_positions = [
                 position - 1
@@ -140,9 +153,6 @@ def main() -> None:
                         "position": int(position),
                     }
                 )
-
-            if (row_index + 1) % max(1, args.log_every) == 0:
-                print(f"Evaluated {row_index + 1}/{len(source)} trajectories", flush=True)
 
     output_path = Path(args.out_parquet)
     output_path.parent.mkdir(parents=True, exist_ok=True)

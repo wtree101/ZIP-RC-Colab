@@ -42,6 +42,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm.auto import tqdm
 import numpy as np
 
 from ziprc_training_visualization import (
@@ -268,6 +269,15 @@ def train(model, dataset, distribution_token_id, num_bins, weights_path,
     # Training loop
     global_step = 0
     accum_losses = {"total": 0.0, "kl": 0.0, "distribution": 0.0}
+    planned_steps = total_iters if max_steps <= 0 else min(total_iters, max_steps)
+    progress = tqdm(
+        total=planned_steps,
+        desc="Train ZIP-RC",
+        unit="step",
+        dynamic_ncols=True,
+        disable=not master,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
+    )
     
     for epoch in range(num_epochs):
         if distributed: sampler.set_epoch(epoch)
@@ -309,6 +319,7 @@ def train(model, dataset, distribution_token_id, num_bins, weights_path,
             optimizer.zero_grad(set_to_none=True)
             
             global_step += 1
+            progress.update(1)
             lr = lr_schedule(global_step)
             for g in optimizer.param_groups: g["lr"] = lr
 
@@ -331,11 +342,11 @@ def train(model, dataset, distribution_token_id, num_bins, weights_path,
                 metrics_file.write(json.dumps(step_metrics) + "\n")
                 metrics_file.flush()
             if master and (global_step == 1 or global_step % max(1, log_every) == 0):
-                print(
-                    f"[train] step={global_step} total={step_metrics['total_loss']:.4f} "
-                    f"distribution={step_metrics['distribution_loss']:.4f} "
-                    f"kl={step_metrics['kl_loss']:.4f} lr={lr:.2e}",
-                    flush=True,
+                progress.set_postfix(
+                    loss=f"{step_metrics['total_loss']:.4f}",
+                    distribution=f"{step_metrics['distribution_loss']:.4f}",
+                    kl=f"{step_metrics['kl_loss']:.4f}",
+                    lr=f"{lr:.2e}",
                 )
             accum_losses = {k: 0.0 for k in accum_losses}
             
@@ -374,6 +385,8 @@ def train(model, dataset, distribution_token_id, num_bins, weights_path,
         
         if max_steps > 0 and global_step >= max_steps:
             break
+
+    progress.close()
 
     # Save model
     if master:

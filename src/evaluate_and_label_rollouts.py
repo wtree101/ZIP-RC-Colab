@@ -22,6 +22,7 @@ import pyarrow as pa
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 import torch
+from tqdm.auto import tqdm
 
 os.environ["VLLM_USE_V1"] = "0"
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -152,7 +153,14 @@ def main() -> None:
     df_finished = df[df["finished"]].copy()
 
     inputs, row_indices = [], []
-    for idx, row in df_finished.iterrows():
+    for idx, row in tqdm(
+        df_finished.iterrows(),
+        total=len(df_finished),
+        desc="Prepare grader prompts",
+        unit="row",
+        dynamic_ncols=True,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
+    ):
         prompt_text = get_eval_prompt(row["prompt"], row["response"], row.get("answer", ""), args.thinking_token)
         chat_input = apply_hf_chat(tokenizer, prompt_text)
 
@@ -166,7 +174,11 @@ def main() -> None:
     elapsed = 0.0
     if inputs:
         start = time.perf_counter()
-        generations = llm.generate(inputs, SamplingParams(max_tokens=1, temperature=0.0, top_k=1))
+        generations = llm.generate(
+            inputs,
+            SamplingParams(max_tokens=1, temperature=0.0, top_k=1),
+            use_tqdm=True,
+        )
         elapsed = time.perf_counter() - start
 
         for idx, gen in zip(row_indices, generations):
@@ -191,7 +203,15 @@ def main() -> None:
         extraction_inputs, extraction_indices = [], []
         total_prompts = prompts_with_no_finished = 0
         
-        for _, grp in df.groupby(group_col):
+        grouped = df.groupby(group_col)
+        for _, grp in tqdm(
+            grouped,
+            total=grouped.ngroups,
+            desc="Prepare consistency prompts",
+            unit="prompt",
+            dynamic_ncols=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
+        ):
             total_prompts += 1
             finished = grp[grp["finished"]]
             if finished.empty:
@@ -209,7 +229,11 @@ def main() -> None:
                 extraction_indices.append(idx)
         
         if extraction_inputs:
-            extracts = llm.generate(extraction_inputs, SamplingParams(max_tokens=8, temperature=0.0, top_k=1))
+            extracts = llm.generate(
+                extraction_inputs,
+                SamplingParams(max_tokens=8, temperature=0.0, top_k=1),
+                use_tqdm=True,
+            )
             for idx, gen in zip(extraction_indices, extracts):
                 row_to_answer[idx] = gen.outputs[0].text.strip().strip('"').strip()
         
