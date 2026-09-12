@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -22,7 +23,12 @@ class Gate(TypedDict):
 def find_repo_root(start: Path | None = None) -> Path:
     """Find the repository from either its root or the notebooks directory."""
     origin = (start or Path.cwd()).resolve()
-    candidates = [origin, *origin.parents, Path("/content/ZIP-RC")]
+    candidates = [
+        origin,
+        *origin.parents,
+        Path("/content/ZIP-RC-Colab"),
+        Path("/content/ZIP-RC"),
+    ]
     for candidate in candidates:
         if (candidate / "src" / "generate_ziprc_rollouts.py").exists():
             return candidate
@@ -33,7 +39,7 @@ def load_config(repo: Path) -> dict[str, object]:
     path = repo / "artifacts" / "experiment_config.json"
     if not path.exists():
         raise FileNotFoundError(
-            f"Missing {path}. Run 00_environment_and_config.ipynb first."
+            f"Missing {path}. Run 00_memory_and_config.ipynb first."
         )
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
@@ -42,6 +48,9 @@ def load_config(repo: Path) -> dict[str, object]:
 def run_repo(repo: Path, *args: object) -> None:
     """Run a command from the repository root and fail on non-zero exit."""
     command = [str(arg) for arg in args]
+    python_executable = os.environ.get("ZIPRC_PYTHON")
+    if python_executable and command and command[0] in {"python", "python3"}:
+        command[0] = python_executable
     print("Running:", " ".join(command), flush=True)
     subprocess.run(command, cwd=repo, check=True)
 
@@ -126,4 +135,3 @@ def model_artifacts_exist(path: Path) -> bool:
         return False
     weight_patterns = ("*.safetensors", "pytorch_model*.bin")
     return any(file.is_file() for pattern in weight_patterns for file in path.glob(pattern))
-

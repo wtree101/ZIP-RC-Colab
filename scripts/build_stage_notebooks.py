@@ -38,9 +38,10 @@ def notebook(*cells: dict[str, object]) -> dict[str, object]:
 
 BOOTSTRAP = """
 from pathlib import Path
+import os
 import sys
 
-candidates = [Path.cwd(), *Path.cwd().parents, Path("/content/ZIP-RC")]
+candidates = [Path.cwd(), *Path.cwd().parents, Path("/content/ZIP-RC-Colab"), Path("/content/ZIP-RC")]
 REPO = next(
     (path for path in candidates if (path / "notebooks" / "ziprc_notebook_utils.py").exists()),
     None,
@@ -48,12 +49,107 @@ REPO = next(
 if REPO is None:
     raise FileNotFoundError("找不到 ZIP-RC 仓库；请从仓库根目录或 notebooks/ 运行。")
 
+colab_python = Path("/content/mamba/envs/zip/bin/python")
+if colab_python.exists():
+    os.environ["ZIPRC_PYTHON"] = str(colab_python)
+
 sys.path.insert(0, str(REPO / "notebooks"))
 from ziprc_notebook_utils import *
 
 CONFIG = load_config(REPO)
 print("Repository:", REPO)
 print("Experiment:", CONFIG["experiment_name"])
+"""
+
+
+COLAB_BOOTSTRAP = """
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+REPO = Path("/content/ZIP-RC-Colab")
+ZIP_PY = Path("/content/mamba/envs/zip/bin/python")
+
+if not REPO.exists():
+    raise FileNotFoundError("远端仓库不存在；请先运行 colab/00_memory_and_config.ipynb。")
+if not ZIP_PY.exists():
+    raise FileNotFoundError("ZIP Python 环境不存在；请先运行 colab/00_memory_and_config.ipynb。")
+
+os.environ["ZIPRC_PYTHON"] = str(ZIP_PY)
+sys.path.insert(0, str(REPO / "notebooks"))
+from ziprc_notebook_utils import *
+
+CONFIG = load_config(REPO)
+print("Repository:", REPO)
+print("ZIP Python:", ZIP_PY)
+print("Experiment:", CONFIG["experiment_name"])
+"""
+
+
+COLAB_SETUP = """
+from pathlib import Path
+import gc
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+REPO = Path("/content/ZIP-RC-Colab")
+ZIP_PY = Path("/content/mamba/envs/zip/bin/python")
+REPO_URL = "https://github.com/wtree101/ZIP-RC-Colab.git"
+REPO_BRANCH = "main"
+SYNC_REPO = True
+
+if not REPO.exists():
+    subprocess.run(["git", "clone", "--branch", REPO_BRANCH, REPO_URL, str(REPO)], check=True)
+elif SYNC_REPO:
+    subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only", "origin", REPO_BRANCH], check=True)
+
+if not ZIP_PY.exists():
+    raise FileNotFoundError(
+        f"未找到 {ZIP_PY}。请先建立 ZIP-RC 的 mamba 环境，再重新运行本 Notebook。"
+    )
+
+# Notebook kernel 只负责分析和画图；vLLM/transformers/datasets 在 ZIP_PY 子进程中检查。
+kernel_required = ["torch", "numpy", "pandas", "pyarrow", "matplotlib", "sklearn", "psutil"]
+kernel_missing = [name for name in kernel_required if importlib.util.find_spec(name) is None]
+if kernel_missing:
+    raise ModuleNotFoundError(f"Colab kernel 缺少可视化依赖: {kernel_missing}")
+
+env_check = subprocess.run(
+    [
+        str(ZIP_PY),
+        "-c",
+        (
+            "import importlib.util, json; "
+            "mods=['torch','vllm','transformers','datasets','pandas','pyarrow']; "
+            "print(json.dumps([m for m in mods if importlib.util.find_spec(m) is None]))"
+        ),
+    ],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+env_missing = json.loads(env_check.stdout.strip())
+if env_missing:
+    raise ModuleNotFoundError(f"zip mamba 环境缺少依赖: {env_missing}")
+
+os.environ["ZIPRC_PYTHON"] = str(ZIP_PY)
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import psutil
+import torch
+from IPython.display import display
+
+sys.path.insert(0, str(REPO / "notebooks"))
+from ziprc_notebook_utils import gate, gate_frame, save_stage_report
+
+print("Repository:", REPO)
+print("ZIP Python:", ZIP_PY)
 """
 
 
@@ -725,17 +821,13 @@ def build_06() -> dict[str, object]:
         code(BOOTSTRAP),
         code(
             """
-            import ast
             import json
 
             import matplotlib.pyplot as plt
             import numpy as np
             import pandas as pd
-            import torch
-            import torch.nn.functional as F
             from IPython.display import display
             from sklearn.metrics import accuracy_score, average_precision_score, brier_score_loss, f1_score, recall_score, roc_auc_score
-            from transformers import AutoModelForCausalLM
 
             final_model = REPO / CONFIG["paths"]["final_model"]
             eval_sources = {
@@ -744,11 +836,6 @@ def build_06() -> dict[str, object]:
             }
             positions_path = REPO / CONFIG["paths"]["predictor_positions"]
             metrics_path = REPO / CONFIG["paths"]["predictor_metrics"]
-
-            def as_int_list(value):
-                if isinstance(value, str):
-                    return [int(item) for item in ast.literal_eval(value)]
-                return [int(item) for item in value]
 
             def expected_calibration_error(labels, probabilities, bins=10):
                 labels = np.asarray(labels, dtype=float)
@@ -766,61 +853,21 @@ def build_06() -> dict[str, object]:
             """
             RUN_EVALUATION = True
             if RUN_EVALUATION:
-                device = torch.device("cuda:0")
-                dtype = torch.bfloat16
-                model = AutoModelForCausalLM.from_pretrained(
-                    final_model, torch_dtype=dtype, trust_remote_code=True, attn_implementation="flash_attention_2"
-                ).to(device).eval()
-                frames = []
-                for split_name, split_path in eval_sources.items():
-                    split_frame = pd.read_parquet(split_path).copy()
-                    split_frame["eval_split"] = split_name
-                    frames.append(split_frame)
-                frame = pd.concat(frames, ignore_index=True)
-                reward_values = torch.tensor(CONFIG["reward_values"], dtype=torch.float32, device=device)
-                length_edges = np.array([0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768])
-                length_midpoints = torch.tensor((length_edges[:-1] + length_edges[1:]) / 2, dtype=torch.float32, device=device)
-                lm_head = model.get_output_embeddings()
-                num_reward_states = len(CONFIG["reward_values"])
-                num_length_bins = int(CONFIG["num_length_bins"])
-                start = int(CONFIG["distribution_token_id"])
-                weight = lm_head.weight[start:start + num_reward_states * num_length_bins]
-                bias = lm_head.bias[start:start + num_reward_states * num_length_bins] if getattr(lm_head, "bias", None) is not None else None
-
-                rows = []
-                with torch.inference_mode():
-                    for row_idx, row in frame.iterrows():
-                        ids = as_int_list(row["input_ids"])[:-1][:int(CONFIG["train_max_length"])]
-                        label_positions = [position - 1 for position in as_int_list(row["label_positions"]) if 0 <= position - 1 < len(ids)]
-                        if not label_positions:
-                            continue
-                        inputs = torch.tensor(ids, dtype=torch.long, device=device).unsqueeze(0)
-                        hidden = model(input_ids=inputs, output_hidden_states=True, use_cache=False).hidden_states[-1][0]
-                        for progress in (.25, .50, .75, 1.0):
-                            list_index = min(len(label_positions) - 1, max(0, round(progress * len(label_positions)) - 1))
-                            position = label_positions[list_index]
-                            logits = F.linear(hidden[position], weight, bias).float()
-                            probs = F.softmax(logits, dim=-1).view(num_reward_states, num_length_bins)
-                            reward_probs = probs.sum(dim=1)
-                            length_probs = probs.sum(dim=0)
-                            rows.append({
-                                "row_idx": row_idx,
-                                "prompt_idx": int(row["prompt_idx"]),
-                                "eval_split": row["eval_split"],
-                                "progress": progress,
-                                "correct": bool(row["correct"]),
-                                "predicted_reward": float(torch.dot(reward_probs, reward_values).item()),
-                                "predicted_remaining": float(torch.dot(length_probs, length_midpoints).item()),
-                                "true_remaining": int(label_positions[-1] - position),
-                                "position": int(position),
-                            })
-                del model
-                torch.cuda.empty_cache()
-                position_df = pd.DataFrame(rows)
-                positions_path.parent.mkdir(parents=True, exist_ok=True)
-                position_df.to_parquet(positions_path, index=False)
-            else:
-                position_df = pd.read_parquet(positions_path)
+                run_repo(
+                    REPO,
+                    "python3", "src/evaluate_ziprc_predictor.py",
+                    "--model", final_model,
+                    "--data", eval_sources["validation"], eval_sources["test"],
+                    "--split-names", "validation", "test",
+                    "--out-parquet", positions_path,
+                    "--distribution-token-id", CONFIG["distribution_token_id"],
+                    "--num-length-bins", CONFIG["num_length_bins"],
+                    "--reward-values", *CONFIG["reward_values"],
+                    "--progress-points", .25, .50, .75, 1.0,
+                    "--max-length", CONFIG["train_max_length"],
+                    "--dtype", CONFIG["dtype"],
+                )
+            position_df = pd.read_parquet(positions_path)
             print("Rows:", len(position_df), "saved to", positions_path)
             """
         ),
@@ -1113,6 +1160,46 @@ def build_08() -> dict[str, object]:
     )
 
 
+def make_colab_notebook(
+    payload: dict[str, object],
+    *,
+    filename: str,
+) -> dict[str, object]:
+    """Replace local bootstrap cells with the fixed Colab runtime contract."""
+    result = json.loads(json.dumps(payload))
+    cells = result["cells"]
+    if filename.startswith("00_"):
+        cells[0]["source"] = (
+            f'<a href="https://colab.research.google.com/github/wtree101/ZIP-RC-Colab/blob/main/notebooks/colab/{filename}" '
+            'target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" '
+            'alt="Open In Colab"/></a>\n\n'
+            + cells[0]["source"]
+            + "\n\n此版本固定使用 `/content/ZIP-RC-Colab` 和 `/content/mamba/envs/zip/bin/python`。"
+        )
+        cells[1]["source"] = dedent(COLAB_SETUP).strip()
+        return result
+
+    generic_bootstrap = dedent(BOOTSTRAP).strip()
+    replacement = dedent(COLAB_BOOTSTRAP).strip()
+    replaced = False
+    for cell in cells:
+        if cell["cell_type"] == "code" and cell["source"] == generic_bootstrap:
+            cell["source"] = replacement
+            replaced = True
+            break
+    if not replaced:
+        raise ValueError(f"Could not find bootstrap cell in {filename}")
+
+    cells[0]["source"] = (
+        f'<a href="https://colab.research.google.com/github/wtree101/ZIP-RC-Colab/blob/main/notebooks/colab/{filename}" '
+        'target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" '
+        'alt="Open In Colab"/></a>\n\n'
+        + cells[0]["source"]
+        + "\n\n先运行 `colab/00_memory_and_config.ipynb`；本 Notebook 的训练命令会自动使用 ZIP mamba 环境。"
+    )
+    return result
+
+
 def main() -> None:
     NOTEBOOK_DIR.mkdir(parents=True, exist_ok=True)
     notebooks = {
@@ -1129,6 +1216,14 @@ def main() -> None:
     for filename, payload in notebooks.items():
         path = NOTEBOOK_DIR / filename
         path.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(path.relative_to(REPO_ROOT))
+
+    colab_dir = NOTEBOOK_DIR / "colab"
+    colab_dir.mkdir(parents=True, exist_ok=True)
+    for filename, payload in notebooks.items():
+        colab_payload = make_colab_notebook(payload, filename=filename)
+        path = colab_dir / filename
+        path.write_text(json.dumps(colab_payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         print(path.relative_to(REPO_ROOT))
 
 

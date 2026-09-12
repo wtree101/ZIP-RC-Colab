@@ -16,6 +16,8 @@ These notebooks implement the 0.6B experiment in `reference/plan.md`. Run them i
 
 The default profile targets one RTX 3090 or Colab L4 with Qwen3-0.6B, BF16, a 4,096-token context, and a 2,048-token output cap. Edit the configuration cell in notebook 00 before running later stages.
 
+For Colab, use the generated notebooks in `notebooks/colab/`. They fix the remote repository at `/content/ZIP-RC-Colab` and route training commands through `/content/mamba/envs/zip/bin/python`, while keeping visualization cells in the normal Colab kernel.
+
 Notebook 07 is explicitly an offline counterfactual proxy because the released repository does not include the paper's online adaptive meta-action sampler. Treat its Pareto curve as a signal for whether implementing the online controller is worthwhile, not as a paper reproduction.
 
 Regenerate the notebooks after editing their source templates with:
