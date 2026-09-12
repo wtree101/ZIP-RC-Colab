@@ -37,19 +37,38 @@ DEFAULTS = {
     "thinking_token": "</think>",
     "data_path": "results/results.parquet", 
     "eval_model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
-    "correct_phrase": "Yes",
     "thinking_token_id": 151667,
 }
 
-def apply_hf_chat(tokenizer, user_content: str) -> str:
+GRADER_SYSTEM_PROMPT = (
+    "You are a strict mathematical answer-equivalence grader. "
+    "Compare the proposed solution with the verified answer. "
+    "Output exactly `Yes.` if they are equivalent and `No.` otherwise. "
+    "Do not explain your reasoning."
+)
+
+
+def apply_hf_chat(
+    tokenizer,
+    user_content: str,
+    *,
+    system_content: str | None = None,
+) -> str:
     """Build a Harmony-format chat prompt via the tokenizer's chat template."""
+    messages = []
+    if system_content is not None:
+        messages.append({"role": "system", "content": system_content})
+    messages.append({"role": "user", "content": user_content})
+
     try:
         return tokenizer.apply_chat_template(
-            [{"role": "user", "content": user_content}],
+            messages,
             tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
     except Exception:
-        return user_content  # fallback (not ideal for Harmony, but safe)
+        if system_content is None:
+            return user_content
+        return f"{system_content}\n\n{user_content}"
 
 def extract_response(response: str, token: str) -> str:
     """Extract response after thinking token if present."""
@@ -58,15 +77,26 @@ def extract_response(response: str, token: str) -> str:
 def get_eval_prompt(prompt: str, response: str, answer: str, thinking_token: str) -> str:
     """Craft the grading prompt for the eval model (correctness w/ gold answer)."""
     return (
-        "Your task is to compare the proposed solution with the verified solution. "
-        "Start by identifying exactly what the question is asking. "
-        "Next, determine the correctness of the proposed solution based on the verified solution. "
-        "Are the two answers equivalent? "
-        'Respond with ONLY the sentence "Yes." or "No."\n\n'
-        f'Question:\n\n"\n{prompt}\n"\n\n'
-        f'Verified Solution:\n\n"\n{answer}\n"\n\n'
-        f'Proposed Solution:\n\n"\n{extract_response(response, thinking_token)}\n"'
+        "Determine whether the proposed solution gives an answer equivalent "
+        "to the verified answer.\n\n"
+        f"Question:\n{prompt}\n\n"
+        f"Verified answer:\n{answer}\n\n"
+        "Proposed solution:\n"
+        f"{extract_response(response, thinking_token)}\n\n"
+        "Output exactly one of:\n"
+        "Yes.\n"
+        "No."
     )
+
+
+def parse_grader_output(output: str) -> bool:
+    """Parse a grader decision, rejecting anything other than Yes or No."""
+    text = output.strip().lower()
+    if text.startswith("yes"):
+        return True
+    if text.startswith("no"):
+        return False
+    raise ValueError(f"Unexpected grader output: {output!r}")
 
 def get_answer_extraction_prompt(question: str, response: str, thinking_token: str) -> str:
     """Craft a prompt to extract the final answer from a solution."""
@@ -172,11 +202,18 @@ def main() -> None:
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed {elapsed}, remaining {remaining}]",
     ):
         prompt_text = get_eval_prompt(row["prompt"], row["response"], row.get("answer", ""), args.thinking_token)
-        chat_input = apply_hf_chat(tokenizer, prompt_text)
+        chat_input = apply_hf_chat(
+            tokenizer,
+            prompt_text,
+            system_content=GRADER_SYSTEM_PROMPT,
+        )
 
-        if len(tokenizer(chat_input).input_ids) > args.max_model_len:
-            df_finished.at[idx, "correct"] = False
-            continue
+        prompt_length = len(tokenizer(chat_input).input_ids)
+        if prompt_length > args.max_model_len:
+            raise ValueError(
+                f"Grader prompt for row {idx} has {prompt_length} tokens, "
+                f"exceeding --max-model-len={args.max_model_len}."
+            )
 
         inputs.append(chat_input)
         row_indices.append(idx)
@@ -187,24 +224,41 @@ def main() -> None:
         with persistent_vllm_progress():
             generations = llm.generate(
                 inputs,
-                SamplingParams(max_tokens=1, temperature=0.0, top_k=1),
+                SamplingParams(max_tokens=16, temperature=0.0, top_k=1),
                 use_tqdm=True,
             )
         elapsed = time.perf_counter() - start
 
-        for idx, gen in zip(row_indices, generations):
-            df_finished.at[idx, "correct"] = DEFAULTS["correct_phrase"] in gen.outputs[0].text
+        if args.show_examples:
+            examples_path = os.path.splitext(args.data)[0] + "_examples.txt"
+            with open(examples_path, "w") as f:
+                f.write("--- Evaluation prompt/response pairs ---\n")
+                for i, (prompt, gen) in enumerate(
+                    random.sample(
+                        list(zip(inputs, generations, strict=True)),
+                        min(len(inputs), 50),
+                    )
+                ):
+                    f.write(
+                        f"\nExample {i + 1}:\nPrompt to eval model:\n{prompt}\n"
+                        f"Eval model response:\n{gen.outputs[0].text.strip()}\n"
+                    )
+                f.write("--- End of evaluation examples ---\n")
+            print(f"Wrote evaluation examples to {examples_path}")
 
-    if args.show_examples and inputs:
-        examples_path = os.path.splitext(args.data)[0] + "_examples.txt"
-        with open(examples_path, "w") as f:
-            f.write("--- Evaluation prompt/response pairs ---\n")
-            for i, (prompt, gen) in enumerate(random.sample(list(zip(inputs, generations)), 
-                                                            min(len(inputs), 50))):
-                f.write(f"\nExample {i+1}:\nPrompt to eval model:\n{prompt}\n"
-                       f"Eval model response:\n{gen.outputs[0].text.strip()}\n")
-            f.write("--- End of evaluation examples ---\n")
-        print(f"Wrote evaluation examples to {examples_path}")
+        # Parse every output before mutating the frame. If any decision is
+        # malformed, abort without writing partially graded labels to disk.
+        graded_results = {}
+        for idx, gen in zip(row_indices, generations, strict=True):
+            output = gen.outputs[0].text
+            try:
+                graded_results[idx] = parse_grader_output(output)
+            except ValueError as error:
+                raise ValueError(
+                    f"Unexpected grader output for row {idx}: {output!r}"
+                ) from error
+        for idx, correct in graded_results.items():
+            df_finished.at[idx, "correct"] = correct
 
     df.update(df_finished)
     pq.write_table(pa.Table.from_pandas(df), args.data)
