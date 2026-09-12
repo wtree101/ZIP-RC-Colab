@@ -1,0 +1,25 @@
+[project]
+name = "zip-rc"
+version = "0.1.0"
+description = "Zero-Overhead Introspection for Adaptive Test-Time Compute"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "datasets==3.5.0",
+    "flash-attn==2.7.4.post1",
+    "ipykernel==6.29.5",
+    "ipython==8.36.0",
+    "matplotlib==3.10.3",
+    "numpy==2.2.5",
+    "pandas==2.2.3",
+    "psutil==7.0.0",
+    "pyarrow==19.0.1",
+    "scikit-learn==1.7.1",
+    "torch==2.6.0",
+    "transformers==4.51.3",
+    "vllm==0.8.5.post1",
+    "wandb==0.19.10",
+]
+
+[tool.uv]
+package = false

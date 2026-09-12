@@ -25,6 +25,8 @@ __pycache__/
 # Track environment files
 !environment.yml
 !environment.lock.yml
+!pyproject.toml
+!uv.lock
 # Ignore temporary scratch area
 scratch/
 reference/
