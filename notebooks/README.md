@@ -13,6 +13,7 @@ These notebooks implement the 0.6B experiment in `reference/plan.md`. The human-
 | `stages/06_predictor_evaluation.ipynb` | Held-out predictor evaluation | AUROC/AUPRC, incorrect recall, calibration, remaining-length MAE |
 | `stages/07_controller_comparison.ipynb` | Fresh-rollout controller proxy | Accuracy versus average generated tokens |
 | `stages/08_graduation_decision.ipynb` | 0.6B graduation decision | Operational/scientific gate summary |
+| `stages/gemini_pro_online_setup.ipynb` | Auxiliary Antigravity setup | Install, OAuth guidance, model list, structured smoke test |
 
 The default profile targets one RTX 3090 or Colab L4 with Qwen3-0.6B, BF16, a 4,096-token context, and a 2,048-token output cap. Edit the configuration cell in notebook 00 before running later stages.
 
@@ -20,7 +21,7 @@ Long-running rollout, grading, training, scoring, and evaluation commands displa
 
 The same progress is checkpointed to `artifacts/progress/*.json` as work completes, throttled to at most one write about every 10 seconds, so it can be inspected after reconnecting. See [`docs/progress.md`](../docs/progress.md) for usage, status meanings, persistence limits, and overhead.
 
-For Colab Enterprise, use the generated files in `notebooks/colab_enterprise/`. Choose the all-in-one file or the standalone Step 00–08 files. They fix the remote repository at `/content/ZIP-RC-Colab` and route model commands through `/content/mamba/envs/zip/bin/python`, while keeping visualization cells in the normal Colab kernel.
+For Colab Enterprise, use the generated files in `notebooks/colab_enterprise/`. Choose the all-in-one file or the standalone Step 00–08 files. They fix the remote repository at `/content/ZIP-RC-Colab` and route model commands through `/content/mamba/envs/zip/bin/python`, while keeping visualization cells in the normal Colab kernel. The generated `gemini_pro_online_setup.ipynb` is a separate interactive setup entry point and is not merged into the all-in-one experiment.
 
 Notebook 07 is explicitly an offline counterfactual proxy because the released repository does not include the paper's online adaptive meta-action sampler. Treat its Pareto curve as a signal for whether implementing the online controller is worthwhile, not as a paper reproduction.
 

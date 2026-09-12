@@ -12,6 +12,15 @@ This command must regenerate both forms in `notebooks/colab_enterprise/`:
 
 - standalone `00_memory_and_config.ipynb` through `08_graduation_decision.ipynb`;
 - `ZIP_RC_experiment_all_in_one.ipynb`.
+- auxiliary setup notebooks declared by the merge script, including
+  `gemini_pro_online_setup.ipynb`; auxiliary notebooks remain standalone and are
+  not inserted into the Step 00–08 merged experiment.
+
+Edit auxiliary notebook sources next to the numbered stages in
+`notebooks/stages/`, then run the same merge command. Never edit their generated
+copies directly. OAuth credentials must remain in the runtime's Antigravity
+credential store; notebook sources and artifacts may contain only non-secret
+settings such as the selected model slug.
 
 All generated notebooks must retain the Colab Enterprise runtime contract:
 
@@ -20,6 +29,8 @@ All generated notebooks must retain the Colab Enterprise runtime contract:
 - run pandas, matplotlib, and display code in the Colab kernel;
 - import shared helpers from the cloned repository;
 - make Step 01–08 load the configuration written by Step 00.
+- add `~/.local/bin` to `PATH` so a runtime-installed `agy` remains visible to
+  grader subprocesses for the lifetime of that runtime.
 - preserve progress bars with completed/total work, elapsed time, and estimated remaining time for every long-running experiment loop.
 - preserve atomic JSON progress checkpoints in `artifacts/progress/`, throttled to avoid per-step disk writes, and keep the generated progress-monitor cells working.
 

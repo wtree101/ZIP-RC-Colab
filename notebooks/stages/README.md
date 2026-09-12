@@ -6,6 +6,9 @@ This directory is the human-editable source for the ZIP-RC experiment.
 - Keep the first code cell in each file: the merge script replaces the Step 00 bootstrap and removes the repeated bootstrap from Steps 01–08.
 - Add, remove, or reorder the remaining markdown and code cells normally.
 - Do not manually edit files in `notebooks/colab_enterprise/`; regenerate them after saving a stage.
+- Edit `gemini_pro_online_setup.ipynb` here as well. It is generated as a
+  standalone auxiliary Notebook and is intentionally excluded from the merged
+  Step 00–08 experiment.
 
 From the repository root, run:
 
@@ -20,3 +23,9 @@ notebooks/colab_enterprise/
 ```
 
 Existing cells receive readable collapsible titles automatically. A newly added code cell receives a generic title and still merges correctly.
+
+For the subscription-backed online grader, run Step 00 first, then import and
+run the generated `gemini_pro_online_setup.ipynb`. Complete OAuth yourself in
+the Colab Enterprise Terminal. Only the selected model slug belongs in
+`artifacts/antigravity_config.json`; never place Antigravity credentials in the
+repository or Notebook output.

@@ -4,6 +4,9 @@
 
 - 想集中运行时，导入 `ZIP_RC_experiment_all_in_one.ipynb`；
 - 想按阶段运行时，依次导入并运行 `00_memory_and_config.ipynb` 到 `08_graduation_decision.ipynb`。
+- 想用 Google AI Pro 订阅在线判分时，先运行 Step 00，再单独导入
+  `gemini_pro_online_setup.ipynb`，按提示安装 `agy`、在 Enterprise Terminal
+  完成 OAuth，并通过结构化 smoke test；然后回到 Step 02。
 
 在 Colab Enterprise 中选择 **My notebooks → Import → Your computer**，导入该文件，然后连接一个 L4 GPU runtime。使用左侧 Outline 在 Step 0–8 之间跳转，一次只运行当前 Step。
 
@@ -23,3 +26,9 @@ python3 scripts/merge_stage_notebooks.py
 
 - runtime 中存在 `/content/mamba/envs/zip/bin/python`；
 - runtime 可以访问公开 GitHub，以便 Step 00 同步 `/content/ZIP-RC-Colab`。
+
+在线 grader 在实验配置中使用项目别名 `gemini-pro-online`；实际 Gemini Pro
+slug 保存在 `artifacts/antigravity_config.json`。在线请求逐条执行并显示 ETA，
+每 10 条保存一次 parquet；重跑时会跳过相同模型已经成功的标签。单条请求在
+重试后仍失败只会写入 `grader_valid=False` 并在结束时警告。OAuth token 只应
+留在当前 runtime 的 Antigravity credential store，不要复制到仓库或 Drive。

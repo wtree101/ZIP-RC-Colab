@@ -14,6 +14,7 @@ DEFAULT_STAGES_DIR = REPO_ROOT / "notebooks" / "stages"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "notebooks" / "colab_enterprise"
 DEFAULT_MERGED_OUTPUT = DEFAULT_OUTPUT_DIR / "ZIP_RC_experiment_all_in_one.ipynb"
 EXPECTED_STAGES = tuple(f"{index:02d}" for index in range(9))
+AUXILIARY_NOTEBOOKS = ("gemini_pro_online_setup.ipynb",)
 
 CELL_TITLES = {
     "00": [
@@ -108,6 +109,7 @@ if env_missing:
     raise ModuleNotFoundError(f"zip mamba 环境缺少依赖: {env_missing}")
 
 os.environ["ZIPRC_PYTHON"] = str(ZIP_PY)
+os.environ["PATH"] = f"{Path.home() / '.local/bin'}{os.pathsep}{os.environ['PATH']}"
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -131,6 +133,34 @@ from ziprc_notebook_utils import (
 
 print("Repository:", REPO)
 print("ZIP Python:", ZIP_PY)
+"""
+
+AUXILIARY_COLAB_SETUP = """
+from pathlib import Path
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+REPO = Path("/content/ZIP-RC-Colab")
+REPO_URL = "https://github.com/wtree101/ZIP-RC-Colab.git"
+REPO_BRANCH = "main"
+SYNC_REPO = True
+
+if not REPO.exists():
+    subprocess.run(["git", "clone", "--branch", REPO_BRANCH, REPO_URL, str(REPO)], check=True)
+elif SYNC_REPO:
+    subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only", "origin", REPO_BRANCH], check=True)
+
+os.environ["PATH"] = f"{Path.home() / '.local/bin'}{os.pathsep}{os.environ['PATH']}"
+AGY = Path.home() / ".local/bin/agy"
+
+import pandas as pd
+from IPython.display import display
+
+print("Repository:", REPO)
+print("Expected agy path:", AGY)
 """
 
 DASHBOARD = """
@@ -360,6 +390,41 @@ def standalone_notebook(stage: str, payload: dict[str, object]) -> dict[str, obj
     }
 
 
+def auxiliary_notebook(payload: dict[str, object]) -> dict[str, object]:
+    """Prepare a human-edited auxiliary notebook for Colab Enterprise."""
+    cells = deepcopy(payload["cells"])
+    if not isinstance(cells, list):
+        raise TypeError("Auxiliary notebook cells must be a list.")
+    cells[first_code_index(cells)]["source"] = dedent(AUXILIARY_COLAB_SETUP).strip()
+    for cell in cells:
+        if cell.get("cell_type") != "code":
+            continue
+        metadata = cell.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            raise TypeError("Notebook cell metadata must be an object.")
+        title = metadata.get("ziprc_title", "Gemini Pro 设置")
+        source = cell_source(cell)
+        if source.startswith("# @title "):
+            source = source.split("\n", 1)[1] if "\n" in source else ""
+        cell["source"] = f"# @title Gemini Pro — {title}\n{source}"
+        metadata["cellView"] = "form"
+        metadata["tags"] = ["gemini-pro-online"]
+        ast.parse(cell_source(cell))
+    return {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {"name": "python", "version": "3.10"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+
 def merge_notebooks(stages: list[tuple[str, dict[str, object]]]) -> dict[str, object]:
     cells = [markdown_cell(INTRO)]
     for stage, payload in stages:
@@ -390,6 +455,20 @@ def main() -> None:
             encoding="utf-8",
         )
         print(f"Built Step {stage} -> {output}")
+
+    for filename in AUXILIARY_NOTEBOOKS:
+        source = stages_dir / filename
+        if not source.exists():
+            raise FileNotFoundError(f"Missing auxiliary notebook: {source}")
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("cells"), list):
+            raise TypeError(f"Invalid notebook structure: {source}")
+        output = output_dir / filename
+        output.write_text(
+            json.dumps(auxiliary_notebook(payload), indent=1, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Built auxiliary notebook -> {output}")
 
     merged_output = (
         args.merged_out.resolve()
