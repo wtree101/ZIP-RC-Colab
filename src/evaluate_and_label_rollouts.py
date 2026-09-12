@@ -94,6 +94,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-model-len", type=int, default=32_768, help="Maximum sequence length to allocate KV cache for")
     p.add_argument("--enforce-eager", action="store_true", default=False, help="Run model in eager mode (disable CUDA graphs)")
     p.add_argument("--max-num-seqs", type=int, default=8, help="Upper bound on concurrently scheduled sequences to reduce memory")
+    p.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+        help="vLLM compute dtype.",
+    )
     p.add_argument("--output-json", type=str, help="Path to save evaluation results as JSON file")
     return p.parse_args()
 
@@ -103,11 +109,12 @@ def main() -> None:
     metrics = {"data_file": args.data, "eval_model": args.model, "use_consistency": args.use_consistency}
     
     df = pq.read_table(args.data).to_pandas()
+    dtype = "auto" if args.dtype == "auto" else getattr(torch, args.dtype)
     llm = LLM(model=args.model,
               max_model_len=args.max_model_len,
               tensor_parallel_size=args.tensor_parallel_size,
               gpu_memory_utilization=args.gpu_memory_utilization,
-              dtype=torch.bfloat16,
+              dtype=dtype,
               trust_remote_code=True,
               enforce_eager=args.enforce_eager,
               max_num_seqs=args.max_num_seqs)

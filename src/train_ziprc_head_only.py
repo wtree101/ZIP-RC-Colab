@@ -16,7 +16,13 @@ Example usage:
 """
 
 from __future__ import annotations
-import argparse, math, os, time
+
+import argparse
+import json
+import math
+import os
+import time
+from pathlib import Path
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -154,6 +160,8 @@ def train(
     dist_backend,
     max_steps=-1,
     visualization_freq=100,
+    metrics_path=None,
+    log_every=10,
 ):
 
     # Setup distributed training
@@ -221,6 +229,13 @@ def train(
     if compile_mode in {"default", "reduce-overhead", "max-autotune"}:
         model = torch.compile(model, mode=compile_mode)
     model.train()
+
+    metrics_file = None
+    if master and metrics_path:
+        path = Path(metrics_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_file = path.open("w", encoding="utf-8")
+    training_started = time.perf_counter()
 
     # Setup optimizer and learning rate schedule
     optimizer = AdamW(
@@ -295,10 +310,29 @@ def train(
             for g in optimizer.param_groups:
                 g["lr"] = lr
 
+            step_metrics = {
+                "step": global_step,
+                "epoch": epoch + 1,
+                "learning_rate": lr,
+                "total_loss": accum_losses["total"],
+                "kl_loss": accum_losses["kl"],
+                "distribution_loss": accum_losses["distribution"],
+                "elapsed_seconds": time.perf_counter() - training_started,
+            }
+
             # Log metrics
             if master and wandb_project and wandb is not None:
                 wandb.log({f"train/{k}_loss": v for k, v in accum_losses.items()} | {"lr": lr, "step": global_step})
-                accum_losses = {k: 0.0 for k in accum_losses}
+            if master and metrics_file is not None:
+                metrics_file.write(json.dumps(step_metrics) + "\n")
+                metrics_file.flush()
+            if master and (global_step == 1 or global_step % max(1, log_every) == 0):
+                print(
+                    f"[train] step={global_step} total={step_metrics['total_loss']:.4f} "
+                    f"distribution={step_metrics['distribution_loss']:.4f} lr={lr:.2e}",
+                    flush=True,
+                )
+            accum_losses = {key: 0.0 for key in accum_losses}
 
             # Visualize predictions occasionally
             if master and global_step % visualization_freq == 0:
@@ -358,6 +392,8 @@ def train(
 
     # Save model
     if master:
+        if metrics_file is not None:
+            metrics_file.close()
         tgt = model.module if hasattr(model, "module") else model
         if hasattr(tgt, "save_pretrained"):
             tgt.save_pretrained(weights_path)
@@ -379,12 +415,17 @@ def main_worker(local_rank, world_size, cfg):
         MASTER_PORT=str(cfg.master_port),
     )
 
+    dtype_name = cfg.dtype
+    if dtype_name == "auto":
+        dtype_name = "bfloat16" if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else "float16"
+    torch_dtype = getattr(torch, dtype_name)
+
     # Load model and tokenizer
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_id, trust_remote_code=True)
     try:
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model_id,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch_dtype,
             attn_implementation="flash_attention_2",
             trust_remote_code=True,
         )
@@ -393,7 +434,7 @@ def main_worker(local_rank, world_size, cfg):
             print(f"flash_attention_2 not available ({e}); falling back to default attention.", flush=True)
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model_id,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch_dtype,
             trust_remote_code=True,
         )
 
@@ -430,7 +471,7 @@ def main_worker(local_rank, world_size, cfg):
         ZIPDataset.collate_fn,
         True,
         42,
-        "bfloat16",
+        dtype_name,
         cfg.compile_mode,
         cfg.num_epochs,
         cfg.batch_size,
@@ -446,6 +487,8 @@ def main_worker(local_rank, world_size, cfg):
         cfg.dist_backend,
         cfg.max_steps,
         cfg.visualization_freq,
+        cfg.metrics_path,
+        cfg.log_every,
     )
 
 
@@ -510,6 +553,19 @@ def parse_args():
     p.add_argument("--warmup-ratio", "--warmup_ratio", dest="warmup_ratio", type=float, default=0.05)
     p.add_argument("--weight-decay", "--weight_decay", dest="weight_decay", type=float, default=0.0)
     p.add_argument("--max-length", "--max_length", dest="max_length", type=int, default=32_768)
+    p.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+        help="Training dtype. Auto selects bfloat16 when supported, otherwise float16.",
+    )
+    p.add_argument(
+        "--metrics-path",
+        type=str,
+        default="",
+        help="Optional JSONL destination for one loss record per optimizer step.",
+    )
+    p.add_argument("--log-every", type=int, default=10, help="Print losses every N optimizer steps.")
     p.add_argument(
         "--max-steps",
         "--max_steps",

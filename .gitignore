@@ -27,3 +27,4 @@ __pycache__/
 !environment.lock.yml
 # Ignore temporary scratch area
 scratch/
+reference/

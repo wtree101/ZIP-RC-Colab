@@ -146,6 +146,8 @@ def worker(
     thinking_samples: int,
     non_thinking_samples: int,
     max_num_seqs: int | None,
+    dtype: str,
+    max_new_tokens: int | None,
 ) -> None:
     """
     Independent worker (no vLLM DP). It owns 'assigned_physical_gpus' exclusively.
@@ -172,10 +174,15 @@ def worker(
         max_model_len=max_model_len,
         tensor_parallel_size=len(assigned_physical_gpus),
         max_num_seqs=max_num_seqs,
+        dtype=dtype,
     )
 
     sampling = SamplingParams(
-        max_tokens=_safe_max_new_tokens(max_model_len),
+        max_tokens=(
+            max_new_tokens
+            if max_new_tokens is not None
+            else _safe_max_new_tokens(max_model_len)
+        ),
         temperature=temperature,
         min_p=min_p,
         detokenize=True,
@@ -304,7 +311,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--temperature", type=float, default=0.6)
     p.add_argument("--min-p", type=float, default=0.05)
     p.add_argument("--max-model-len", type=int, default=DEFAULTS["max_model_len"])
+    p.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=None,
+        help="Maximum generated tokens per response. Defaults to max(128, max_model_len - 1024).",
+    )
     p.add_argument("--max-num-prompts", type=int, default=DEFAULTS["max_prompts"])
+    p.add_argument(
+        "--skip-num-prompts",
+        type=int,
+        default=0,
+        help="Skip this many examples after the deterministic shuffle (useful for held-out evaluation).",
+    )
     p.add_argument("--max-num-seqs", type=int, default=None,
                    help="Cap concurrent in-flight sequences per worker to reduce KV cache pressure.")
     p.add_argument("--thinking-samples", type=int, default=DEFAULTS["thinking_samples"],
@@ -316,6 +335,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--split", default=DEFAULTS["split"])
     p.add_argument("--prompt-column", default=DEFAULTS["prompt_column"])
     p.add_argument("--answer-column", default=DEFAULTS["answer_column"])
+    p.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+        help="vLLM compute dtype.",
+    )
     p.add_argument("--allow-partial-merge", action="store_true",
                    help="If set, merge whatever shards exist; otherwise require all dp-size shards.")
     return p.parse_args()
@@ -328,6 +353,12 @@ def main() -> None:
     if total_per_prompt == 0:
         print("No samples requested (--thinking-samples + --non-thinking-samples == 0). Exiting.")
         return
+    if args.max_num_prompts <= 0:
+        raise ValueError("--max-num-prompts must be positive.")
+    if args.skip_num_prompts < 0:
+        raise ValueError("--skip-num-prompts cannot be negative.")
+    if args.max_new_tokens is not None and not 0 < args.max_new_tokens < args.max_model_len:
+        raise ValueError("--max-new-tokens must be positive and smaller than --max-model-len.")
 
     # Determine parent-visible physical GPU IDs and plan assignments
     physical_ids = _resolve_parent_visible_gpus()
@@ -343,16 +374,19 @@ def main() -> None:
     # Load prompts/answers either from a named benchmark or from a generic dataset
     if args.benchmark:
         prompts, answers = load_benchmark(args.benchmark)
-        # Cap to max_num_prompts
-        prompts = prompts[: args.max_num_prompts]
-        answers = answers[: len(prompts)]
+        start = args.skip_num_prompts
+        stop = start + args.max_num_prompts
+        prompts = prompts[start:stop]
+        answers = answers[start:stop]
     else:
         ds = load_dataset(args.dataset, split=args.split).shuffle(seed=42)
         if args.prompt_column not in ds.column_names:
             raise ValueError(f"Prompt column '{args.prompt_column}' not in dataset columns: {ds.column_names}")
-        prompts = ds[args.prompt_column][:args.max_num_prompts]
+        start = args.skip_num_prompts
+        stop = start + args.max_num_prompts
+        prompts = ds[args.prompt_column][start:stop]
         if args.answer_column and args.answer_column in ds.column_names:
-            answers = ds[args.answer_column][:args.max_num_prompts]
+            answers = ds[args.answer_column][start:stop]
         else:
             answers = [None] * len(prompts)
 
@@ -364,6 +398,13 @@ def main() -> None:
         print(f"Prompts: {len(prompts)} (max {args.max_num_prompts})  |  split: {args.split}")
     print(f"Samples / prompt: {total_per_prompt}  "
           f"(reasoning={args.thinking_samples}, non_reasoning={args.non_thinking_samples})")
+    print(f"Dataset offset: {args.skip_num_prompts}  |  dtype: {args.dtype}")
+    max_new_tokens = (
+        args.max_new_tokens
+        if args.max_new_tokens is not None
+        else _safe_max_new_tokens(args.max_model_len)
+    )
+    print(f"Max new tokens: {max_new_tokens}")
     print(f"Workers (dp-size): {args.dp_size}  |  TP per worker: {args.tp_size}")
     print(f"Visible GPUs: {physical_ids}")
 
@@ -396,6 +437,8 @@ def main() -> None:
                 args.thinking_samples,
                 args.non_thinking_samples,
                 args.max_num_seqs,
+                args.dtype,
+                args.max_new_tokens,
             ),
             daemon=False,
         )
