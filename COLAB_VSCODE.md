@@ -1,23 +1,23 @@
 # ZIP-RC with Colab in VS Code
 
-This folder contains the authors' official ZIP-RC repository plus a self-contained
-notebook for a single Colab GPU:
+This repository provides generated Colab Enterprise notebooks for a single GPU:
 
-- `notebooks/ziprc_colab_vscode.ipynb`
+- `notebooks/colab_enterprise/ZIP_RC_experiment_all_in_one.ipynb` for one-file execution;
+- `notebooks/colab_enterprise/00_memory_and_config.ipynb` through
+  `08_graduation_decision.ipynb` for stage-by-stage execution.
 
 ## Connect VS Code to Colab
 
 1. Open this folder in VS Code.
 2. Install the recommended **Google Colab** and **Jupyter** extensions.
-3. Open `notebooks/ziprc_colab_vscode.ipynb`.
+3. Open one of the generated notebooks in `notebooks/colab_enterprise/`.
 4. Click **Select Kernel** in the upper-right corner.
 5. Choose **Colab**, sign in, then select **New Colab Server** or **Auto Connect**.
-6. Prefer an A100 server for the paper's Qwen3-1.7B model. The notebook
-   automatically switches to Qwen3-0.6B when GPU memory is below 35 GB.
+6. Use an RTX 3090 or Colab L4 for the default Qwen3-0.6B experiment.
 7. Run one notebook section at a time. Markdown headings can be collapsed in
    VS Code, keeping the long pipeline manageable.
 
-The notebook clones the official repository into `/content/ZIP-RC` on the Colab
+The notebook clones this repository into `/content/ZIP-RC-Colab` on the Colab
 VM. This is necessary because a local VS Code workspace is not automatically the
 remote runtime's filesystem.
 

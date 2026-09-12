@@ -18,6 +18,7 @@ __pycache__/
 
 # Track key docs
 !README.md
+!AGENT.md
 !COLAB_VSCODE.md
 !LICENSE
 !.gitignore
