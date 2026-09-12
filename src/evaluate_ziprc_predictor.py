@@ -12,7 +12,8 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
-from tqdm.auto import tqdm
+
+from ziprc_progress import PersistentTqdm, configure_progress, default_progress_path
 
 LENGTH_EDGES = np.array([0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768])
 
@@ -62,6 +63,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    configure_progress(
+        default_progress_path("evaluate_ziprc_predictor.json"),
+        job="evaluate ZIP-RC predictor",
+    )
     if len(args.data) != len(args.split_names):
         raise ValueError("--data and --split-names must have the same number of values.")
     if len(LENGTH_EDGES) - 1 != args.num_length_bins:
@@ -103,7 +108,7 @@ def main() -> None:
 
     rows: list[dict[str, object]] = []
     with torch.inference_mode():
-        for row_index, row in tqdm(
+        for row_index, row in PersistentTqdm(
             source.iterrows(),
             total=len(source),
             desc="Evaluate predictor",

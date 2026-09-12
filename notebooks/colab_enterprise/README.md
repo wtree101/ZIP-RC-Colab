@@ -9,6 +9,8 @@
 
 完成一个阶段后，重新运行 `Step 00.2 — 实验进度与下一步`；它会读取阶段报告、画出完成度，并提示下一步。
 
+耗时任务会在样本、batch 或 step 完成时更新 `artifacts/progress/*.json`，并限制为最多约每 10 秒写一次。分步 Notebook 中可以重新运行“查看持久化进度”cell；统一 Notebook 在 Step 00 的进度面板中显示这些快照。浏览器断开后的具体用法见 `docs/progress.md`。
+
 需要修改某个阶段时，直接编辑 `notebooks/stages/` 下对应的 IPYNB，然后运行：
 
 ```bash

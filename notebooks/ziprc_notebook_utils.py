@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Iterable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
@@ -19,6 +21,16 @@ class Gate(TypedDict):
     passed: bool
     detail: str
     kind: str
+
+
+_PROGRESS_ARTIFACT_FLAGS = (
+    "--metrics-path",
+    "--output-json",
+    "--out-parquet",
+    "--out",
+    "--data",
+    "--data-path",
+)
 
 
 def find_repo_root(start: Path | None = None) -> Path:
@@ -46,19 +58,122 @@ def load_config(repo: Path) -> dict[str, object]:
         return json.load(handle)
 
 
+def _command_argument(command: Sequence[str], flag: str) -> str | None:
+    try:
+        index = command.index(flag)
+    except ValueError:
+        return None
+    return command[index + 1] if index + 1 < len(command) else None
+
+
+def _command_progress_path(repo: Path, command: Sequence[str]) -> Path | None:
+    if len(command) < 2 or Path(command[1]).suffix != ".py":
+        return None
+    script = Path(command[1]).stem
+    artifact = next(
+        (
+            value
+            for flag in _PROGRESS_ARTIFACT_FLAGS
+            if (value := _command_argument(command, flag)) is not None
+        ),
+        "run",
+    )
+    artifact_name = Path(artifact).stem or "run"
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{script}__{artifact_name}")
+    return repo / "artifacts" / "progress" / f"{safe_name}.json"
+
+
+def _mark_command_failed(path: Path, error: subprocess.CalledProcessError) -> None:
+    payload: dict[str, object] = {}
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+    payload.update(
+        {
+            "status": "failed",
+            "error": f"exit code {error.returncode}",
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    )
+    temporary = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
 def run_repo(repo: Path, *args: object) -> None:
     """Run a command from the repository root and fail on non-zero exit."""
     command = [str(arg) for arg in args]
     python_executable = os.environ.get("ZIPRC_PYTHON")
     if python_executable and command and command[0] in {"python", "python3"}:
         command[0] = python_executable
+    progress_path = _command_progress_path(repo, command)
+    environment = os.environ.copy()
+    if progress_path is not None:
+        environment["ZIPRC_PROGRESS_PATH"] = str(progress_path)
+        print("Progress checkpoint:", progress_path, flush=True)
     print("Running:", " ".join(command), flush=True)
     started = time.perf_counter()
     try:
-        subprocess.run(command, cwd=repo, check=True)
+        subprocess.run(command, cwd=repo, check=True, env=environment)
+    except subprocess.CalledProcessError as error:
+        if progress_path is not None:
+            try:
+                _mark_command_failed(progress_path, error)
+            except OSError as checkpoint_error:
+                print(f"Could not mark progress as failed: {checkpoint_error}", flush=True)
+        raise
     finally:
         elapsed = time.perf_counter() - started
         print(f"Command elapsed time: {elapsed / 60:.1f} minutes", flush=True)
+
+
+def _format_seconds(value: object) -> str:
+    if not isinstance(value, (int, float)) or value < 0:
+        return "—"
+    seconds = round(value)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:d}:{seconds:02d}"
+
+
+def progress_frame(repo: Path) -> pd.DataFrame:
+    """Return the latest durable progress snapshots as a compact display table."""
+    directory = repo / "artifacts" / "progress"
+    rows: list[dict[str, object]] = []
+    for path in sorted(directory.glob("*.json")) if directory.exists() else []:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        completed = payload.get("completed")
+        total = payload.get("total")
+        progress = f"{completed:g}/{total:g}" if isinstance(completed, (int, float)) and isinstance(total, (int, float)) else "—"
+        updated_at = payload.get("updated_at")
+        age_minutes: float | None = None
+        if isinstance(updated_at, str):
+            try:
+                updated = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                age_minutes = (datetime.now(timezone.utc) - updated).total_seconds() / 60
+            except ValueError:
+                pass
+        rows.append(
+            {
+                "任务": payload.get("job", path.stem),
+                "阶段": payload.get("phase", "—"),
+                "状态": payload.get("status", "unknown"),
+                "进度": progress,
+                "百分比": round(float(payload["percent"]), 1) if isinstance(payload.get("percent"), (int, float)) else None,
+                "已耗时": _format_seconds(payload.get("job_elapsed_seconds", payload.get("elapsed_seconds"))),
+                "预计剩余": _format_seconds(payload.get("remaining_seconds")),
+                "预计完成": payload.get("eta", "—"),
+                "距上次更新/分钟": round(age_minutes, 1) if age_minutes is not None else None,
+                "文件": path.name,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def require_columns(frame: pd.DataFrame, columns: Iterable[str]) -> list[str]:

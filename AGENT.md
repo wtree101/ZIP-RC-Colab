@@ -21,5 +21,8 @@ All generated notebooks must retain the Colab Enterprise runtime contract:
 - import shared helpers from the cloned repository;
 - make Step 01–08 load the configuration written by Step 00.
 - preserve progress bars with completed/total work, elapsed time, and estimated remaining time for every long-running experiment loop.
+- preserve atomic JSON progress checkpoints in `artifacts/progress/`, throttled to avoid per-step disk writes, and keep the generated progress-monitor cells working.
 
 Validate generator changes by running the generator, parsing every generated code cell with `ast.parse`, and checking `ruff` plus `py_compile` for the generator. Keep only the editable stage notebooks and generated Colab Enterprise notebooks; do not recreate root-level or `notebooks/colab/` notebook copies.
+
+`scripts/build_stage_notebooks.py` is retained only as a compatibility wrapper and must delegate to `scripts/merge_stage_notebooks.py`; it must not write legacy root-level or `notebooks/colab/` copies.

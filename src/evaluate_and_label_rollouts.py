@@ -22,7 +22,13 @@ import pyarrow as pa
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 import torch
-from tqdm.auto import tqdm
+
+from ziprc_progress import (
+    PersistentTqdm,
+    configure_progress,
+    default_progress_path,
+    persistent_vllm_progress,
+)
 
 os.environ["VLLM_USE_V1"] = "0"
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -107,6 +113,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    configure_progress(
+        default_progress_path("evaluate_and_label_rollouts.json"),
+        job="grade rollout correctness",
+    )
     metrics = {"data_file": args.data, "eval_model": args.model, "use_consistency": args.use_consistency}
     
     df = pq.read_table(args.data).to_pandas()
@@ -153,7 +163,7 @@ def main() -> None:
     df_finished = df[df["finished"]].copy()
 
     inputs, row_indices = [], []
-    for idx, row in tqdm(
+    for idx, row in PersistentTqdm(
         df_finished.iterrows(),
         total=len(df_finished),
         desc="Prepare grader prompts",
@@ -174,11 +184,12 @@ def main() -> None:
     elapsed = 0.0
     if inputs:
         start = time.perf_counter()
-        generations = llm.generate(
-            inputs,
-            SamplingParams(max_tokens=1, temperature=0.0, top_k=1),
-            use_tqdm=True,
-        )
+        with persistent_vllm_progress():
+            generations = llm.generate(
+                inputs,
+                SamplingParams(max_tokens=1, temperature=0.0, top_k=1),
+                use_tqdm=True,
+            )
         elapsed = time.perf_counter() - start
 
         for idx, gen in zip(row_indices, generations):
@@ -204,7 +215,7 @@ def main() -> None:
         total_prompts = prompts_with_no_finished = 0
         
         grouped = df.groupby(group_col)
-        for _, grp in tqdm(
+        for _, grp in PersistentTqdm(
             grouped,
             total=grouped.ngroups,
             desc="Prepare consistency prompts",
@@ -229,11 +240,12 @@ def main() -> None:
                 extraction_indices.append(idx)
         
         if extraction_inputs:
-            extracts = llm.generate(
-                extraction_inputs,
-                SamplingParams(max_tokens=8, temperature=0.0, top_k=1),
-                use_tqdm=True,
-            )
+            with persistent_vllm_progress():
+                extracts = llm.generate(
+                    extraction_inputs,
+                    SamplingParams(max_tokens=8, temperature=0.0, top_k=1),
+                    use_tqdm=True,
+                )
             for idx, gen in zip(extraction_indices, extracts):
                 row_to_answer[idx] = gen.outputs[0].text.strip().strip('"').strip()
         

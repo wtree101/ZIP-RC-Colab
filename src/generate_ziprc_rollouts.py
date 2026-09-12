@@ -35,6 +35,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
+from ziprc_progress import configure_progress, default_progress_path, persistent_vllm_progress
+
 os.environ["VLLM_USE_V1"] = "0"
 
 DEFAULTS = {
@@ -152,6 +154,13 @@ def worker(
     """
     Independent worker (no vLLM DP). It owns 'assigned_physical_gpus' exclusively.
     """
+    progress_path = default_progress_path("generate_ziprc_rollouts.json")
+    if dp_size > 1:
+        progress_path = progress_path.with_name(
+            f"{progress_path.stem}.rank{rank}{progress_path.suffix}"
+        )
+    configure_progress(progress_path, job=f"rollout generation (rank {rank})")
+
     # 1) Pin CUDA devices *before* any torch.cuda activity.
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in assigned_physical_gpus)
 
@@ -207,7 +216,8 @@ def worker(
 
     # 6) Generate
     start = time.perf_counter()
-    generations = list(llm.generate(inputs, sampling, use_tqdm=True))
+    with persistent_vllm_progress():
+        generations = list(llm.generate(inputs, sampling, use_tqdm=True))
     elapsed = time.perf_counter() - start
 
     # 7) Build rows

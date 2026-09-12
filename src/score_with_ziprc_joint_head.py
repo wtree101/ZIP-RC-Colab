@@ -29,7 +29,8 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from transformers import AutoModelForCausalLM
-from tqdm.auto import tqdm
+
+from ziprc_progress import PersistentTqdm, configure_progress, default_progress_path
 
 # ---------------------------
 # Utilities
@@ -157,6 +158,11 @@ def expected_values_last_k(
 # ---------------------------
 
 def worker(rank: int, world_size: int, args):
+    configure_progress(
+        default_progress_path("score_with_ziprc_joint_head.json"),
+        job="score trajectories with ZIP-RC",
+        enabled=rank == 0,
+    )
     # Do NOT set MASTER_PORT per-rank; set it once in main()
     os.environ["RANK"] = str(rank)
     os.environ["LOCAL_RANK"] = str(rank)
@@ -266,7 +272,7 @@ def worker(rank: int, world_size: int, args):
     t0 = time.time()
     seen = 0
 
-    progress = tqdm(
+    progress = PersistentTqdm(
         total=len(loader),
         desc="Score trajectories",
         unit="batch",

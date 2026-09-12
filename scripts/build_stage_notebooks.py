@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -1201,30 +1203,9 @@ def make_colab_notebook(
 
 
 def main() -> None:
-    NOTEBOOK_DIR.mkdir(parents=True, exist_ok=True)
-    notebooks = {
-        "00_memory_and_config.ipynb": build_00(),
-        "01_pilot_generation.ipynb": build_01(),
-        "02_pilot_quality.ipynb": build_02(),
-        "03_training_data.ipynb": build_03(),
-        "04_prompt_split.ipynb": build_04(),
-        "05_predictor_training.ipynb": build_05(),
-        "06_predictor_evaluation.ipynb": build_06(),
-        "07_controller_comparison.ipynb": build_07(),
-        "08_graduation_decision.ipynb": build_08(),
-    }
-    for filename, payload in notebooks.items():
-        path = NOTEBOOK_DIR / filename
-        path.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(path.relative_to(REPO_ROOT))
-
-    colab_dir = NOTEBOOK_DIR / "colab"
-    colab_dir.mkdir(parents=True, exist_ok=True)
-    for filename, payload in notebooks.items():
-        colab_payload = make_colab_notebook(payload, filename=filename)
-        path = colab_dir / filename
-        path.write_text(json.dumps(colab_payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(path.relative_to(REPO_ROOT))
+    replacement = REPO_ROOT / "scripts" / "merge_stage_notebooks.py"
+    print(f"Legacy command: delegating to {replacement.relative_to(REPO_ROOT)}")
+    subprocess.run([sys.executable, str(replacement)], cwd=REPO_ROOT, check=True)
 
 
 if __name__ == "__main__":

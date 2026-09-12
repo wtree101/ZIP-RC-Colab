@@ -32,8 +32,9 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from tqdm.auto import tqdm
 import numpy as np
+
+from ziprc_progress import PersistentTqdm, configure_progress, default_progress_path
 
 from ziprc_training_visualization import (
     visualize_predictions,
@@ -262,7 +263,7 @@ def train(
     global_step = 0
     accum_losses = {"total": 0.0, "kl": 0.0, "distribution": 0.0}
     planned_steps = total_iters if max_steps <= 0 else min(total_iters, max_steps)
-    progress = tqdm(
+    progress = PersistentTqdm(
         total=planned_steps,
         desc="Train ZIP-RC Lite",
         unit="step",
@@ -420,6 +421,11 @@ def train(
 
 
 def main_worker(local_rank, world_size, cfg):
+    configure_progress(
+        default_progress_path("train_ziprc_head_only.json"),
+        job="train ZIP-RC Lite",
+        enabled=local_rank == 0,
+    )
     os.environ.update(
         WORLD_SIZE=str(world_size),
         RANK=str(local_rank),

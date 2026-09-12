@@ -18,6 +18,8 @@ The default profile targets one RTX 3090 or Colab L4 with Qwen3-0.6B, BF16, a 4,
 
 Long-running rollout, grading, training, scoring, and evaluation commands display completed/total work, elapsed time, and estimated remaining time. The estimate starts after the first measurable batch and becomes more stable after warm-up; initial model downloads and CUDA/vLLM startup are reported in the command's final elapsed time but cannot be predicted accurately in advance.
 
+The same progress is checkpointed to `artifacts/progress/*.json` as work completes, throttled to at most one write about every 10 seconds, so it can be inspected after reconnecting. See [`docs/progress.md`](../docs/progress.md) for usage, status meanings, persistence limits, and overhead.
+
 For Colab Enterprise, use the generated files in `notebooks/colab_enterprise/`. Choose the all-in-one file or the standalone Step 00–08 files. They fix the remote repository at `/content/ZIP-RC-Colab` and route model commands through `/content/mamba/envs/zip/bin/python`, while keeping visualization cells in the normal Colab kernel.
 
 Notebook 07 is explicitly an offline counterfactual proxy because the released repository does not include the paper's online adaptive meta-action sampler. Treat its Pareto curve as a signal for whether implementing the online controller is worthwhile, not as a paper reproduction.
@@ -28,4 +30,4 @@ After editing a notebook in `notebooks/stages/`, rebuild all Colab Enterprise no
 python3 scripts/merge_stage_notebooks.py
 ```
 
-`scripts/build_stage_notebooks.py` is a legacy scaffold and is not part of the editing workflow.
+`scripts/build_stage_notebooks.py` is a compatibility entry point that delegates to the command above, so it no longer recreates obsolete notebook copies.

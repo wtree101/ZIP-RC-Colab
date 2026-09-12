@@ -121,6 +121,7 @@ from ziprc_notebook_utils import (
     gate_frame,
     load_config,
     model_artifacts_exist,
+    progress_frame,
     read_jsonl,
     require_columns,
     rolling_edges,
@@ -179,10 +180,20 @@ ax.text(completed_count / 2 if completed_count else 0.15, 0, f"{completed_count}
 plt.tight_layout()
 plt.show()
 
+runtime_progress = progress_frame(REPO)
+print("耗时任务的持久化进度（运行本 cell 可重新读取）：")
+display(runtime_progress if not runtime_progress.empty else pd.DataFrame([{"状态": "尚无进度记录"}]))
+
 if next_step is None:
     print("✅ Step 0–8 均已完成；查看 Step 08 的毕业结论。")
 else:
     print(f"下一步：从左侧 Outline 跳到 Step {int(next_step)}。完成后重新运行本面板。")
+"""
+
+PROGRESS_MONITOR = """
+runtime_progress = progress_frame(REPO)
+print("持久化进度快照：")
+display(runtime_progress if not runtime_progress.empty else pd.DataFrame([{"状态": "尚无进度记录"}]))
 """
 
 
@@ -247,7 +258,7 @@ def title_code_cells(
 ) -> None:
     defaults = CELL_TITLES.get(stage, [])
     if standalone and stage != "00":
-        defaults = ["初始化运行环境", *defaults]
+        defaults = ["初始化运行环境", "查看持久化进度", *defaults]
     code_cells = [cell for cell in cells if cell.get("cell_type") == "code"]
     for index, cell in enumerate(code_cells, start=1):
         metadata = cell.setdefault("metadata", {})
@@ -327,6 +338,8 @@ def prepare_standalone_stage(stage: str, payload: dict[str, object]) -> list[dic
 
     if stage == "00":
         cells.insert(bootstrap_index + 1, code_cell(DASHBOARD))
+    else:
+        cells.insert(bootstrap_index + 1, code_cell(PROGRESS_MONITOR))
 
     title_code_cells(cells, stage, standalone=True)
     for cell in cells:
