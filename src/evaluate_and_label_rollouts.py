@@ -27,6 +27,7 @@ from ziprc_progress import (
     PersistentTqdm,
     configure_progress,
     default_progress_path,
+    mark_progress_failed,
     persistent_vllm_progress,
 )
 
@@ -97,6 +98,15 @@ def parse_grader_output(output: str) -> bool:
     if text.startswith("no"):
         return False
     raise ValueError(f"Unexpected grader output: {output!r}")
+
+
+def resolve_grader_output(output: str) -> tuple[bool, bool]:
+    """Return ``(correct, valid)`` without aborting on malformed output."""
+    try:
+        return parse_grader_output(output), True
+    except ValueError:
+        return "Yes" in output, False
+
 
 def get_answer_extraction_prompt(question: str, response: str, thinking_token: str) -> str:
     """Craft a prompt to extract the final answer from a solution."""
@@ -190,7 +200,10 @@ def main() -> None:
 
     # Evaluate correctness for finished rows first so downstream metrics can use the 'correct' column
     df["correct"] = df["finished"]
+    df["grader_output"] = pd.Series(pd.NA, index=df.index, dtype="string")
+    df["grader_valid"] = pd.Series(pd.NA, index=df.index, dtype="boolean")
     df_finished = df[df["finished"]].copy()
+    invalid_grader_outputs: list[tuple[object, str]] = []
 
     inputs, row_indices = [], []
     for idx, row in PersistentTqdm(
@@ -210,10 +223,15 @@ def main() -> None:
 
         prompt_length = len(tokenizer(chat_input).input_ids)
         if prompt_length > args.max_model_len:
-            raise ValueError(
+            message = (
                 f"Grader prompt for row {idx} has {prompt_length} tokens, "
                 f"exceeding --max-model-len={args.max_model_len}."
             )
+            df_finished.at[idx, "correct"] = False
+            df_finished.at[idx, "grader_output"] = message
+            df_finished.at[idx, "grader_valid"] = False
+            invalid_grader_outputs.append((idx, message))
+            continue
 
         inputs.append(chat_input)
         row_indices.append(idx)
@@ -246,17 +264,15 @@ def main() -> None:
                 f.write("--- End of evaluation examples ---\n")
             print(f"Wrote evaluation examples to {examples_path}")
 
-        # Parse every output before mutating the frame. If any decision is
-        # malformed, abort without writing partially graded labels to disk.
         graded_results = {}
         for idx, gen in zip(row_indices, generations, strict=True):
             output = gen.outputs[0].text
-            try:
-                graded_results[idx] = parse_grader_output(output)
-            except ValueError as error:
-                raise ValueError(
-                    f"Unexpected grader output for row {idx}: {output!r}"
-                ) from error
+            df_finished.at[idx, "grader_output"] = output
+            correct, valid = resolve_grader_output(output)
+            graded_results[idx] = correct
+            df_finished.at[idx, "grader_valid"] = valid
+            if not valid:
+                invalid_grader_outputs.append((idx, output))
         for idx, correct in graded_results.items():
             df_finished.at[idx, "correct"] = correct
 
@@ -521,6 +537,7 @@ def main() -> None:
         print(f"Best-of-n selections using reasoning: {num_reasoning}/{total_chosen} ({reasoning_pct:.2f}%)")
 
     metrics["evaluation_time_seconds"] = float(elapsed)
+    metrics["invalid_grader_outputs"] = len(invalid_grader_outputs)
     print(f"Evaluation time: {elapsed:.2f}s")
 
     if args.output_json:
@@ -528,6 +545,22 @@ def main() -> None:
             json.dump(metrics, f, indent=2)
         print(f"\n✓ Saved evaluation results to {args.output_json}")
 
+    if invalid_grader_outputs:
+        preview = ", ".join(
+            f"row {idx}: {output.strip()!r}"
+            for idx, output in invalid_grader_outputs[:5]
+        )
+        warnings.warn(
+            f"{len(invalid_grader_outputs)} grader outputs were not valid Yes/No "
+            f"decisions. Legacy contains-Yes fallback was used. Examples: {preview}",
+            RuntimeWarning,
+            stacklevel=1,
+        )
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        mark_progress_failed(f"{type(error).__name__}: {error}")
+        raise

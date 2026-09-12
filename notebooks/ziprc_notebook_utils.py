@@ -90,13 +90,10 @@ def _mark_command_failed(path: Path, error: subprocess.CalledProcessError) -> No
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             payload = {}
-    payload.update(
-        {
-            "status": "failed",
-            "error": f"exit code {error.returncode}",
-            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-    )
+    payload["status"] = "failed"
+    payload.setdefault("error", f"exit code {error.returncode}")
+    payload["exit_code"] = error.returncode
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     temporary = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -122,6 +119,11 @@ def run_repo(repo: Path, *args: object) -> None:
         if progress_path is not None:
             try:
                 _mark_command_failed(progress_path, error)
+                payload = json.loads(progress_path.read_text(encoding="utf-8"))
+                print(
+                    f"Command failed: {payload.get('error', f'exit code {error.returncode}')}",
+                    flush=True,
+                )
             except OSError as checkpoint_error:
                 print(f"Could not mark progress as failed: {checkpoint_error}", flush=True)
         raise
