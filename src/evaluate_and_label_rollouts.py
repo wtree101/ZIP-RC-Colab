@@ -84,6 +84,21 @@ GRADER_FORMAT_EXAMPLES = (
 )
 
 
+def configure_antigravity_proxy() -> None:
+    """Make online grader subprocesses inherit the configured proxy."""
+    proxy_url = os.environ.get(
+        "ZIPRC_PROXY",
+        os.environ.get("ZIP_RC_PROXY", "http://sccpu8.cse.ust.hk:7890"),
+    ).strip()
+    if not proxy_url:
+        return
+    for proxy_variable in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        os.environ[proxy_variable] = proxy_url
+        os.environ[proxy_variable.lower()] = proxy_url
+    os.environ["NO_PROXY"] = ""
+    os.environ["no_proxy"] = ""
+
+
 def apply_hf_chat(
     tokenizer,
     user_content: str,
@@ -225,7 +240,7 @@ def configured_antigravity_model(config_path: Path) -> str | None:
 
 
 def choose_antigravity_model(agy: str, configured: str | None) -> str:
-    """Resolve an explicit Pro slug or select the first advertised Pro model."""
+    """Resolve an explicit slug or prefer the advertised medium Gemini model."""
     model = (
         configured
         or os.environ.get("ZIPRC_AGY_MODEL")
@@ -240,12 +255,19 @@ def choose_antigravity_model(agy: str, configured: str | None) -> str:
         capture_output=True,
         text=True,
     )
-    for line in result.stdout.splitlines():
-        fields = line.strip().split()
-        if fields and fields[0].startswith("gemini-") and "pro" in fields[0].lower():
-            return fields[0]
+    gemini_models = [
+        fields[0]
+        for line in result.stdout.splitlines()
+        if (fields := line.strip().split()) and fields[0].startswith("gemini-")
+    ]
+    preferred = next(
+        (model for model in gemini_models if "-medium" in model.lower()),
+        None,
+    )
+    if preferred:
+        return preferred
     raise ValueError(
-        "No Gemini Pro slug was found in `agy models`. Select one in "
+        "No Gemini slug was found in `agy models`. Select one in "
         "gemini_pro_online_setup.ipynb or pass --agy-model explicitly."
     )
 
@@ -328,6 +350,7 @@ def grade_with_antigravity(
     if args.checkpoint_every < 1:
         raise ValueError("--checkpoint-every must be at least 1.")
 
+    configure_antigravity_proxy()
     agy = find_antigravity_executable(args.agy_executable)
     model = choose_antigravity_model(agy, args.agy_model)
     print(f"Online grader: {ONLINE_MODEL_ALIAS} -> {model}")
@@ -570,7 +593,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--agy-effort",
         choices=["low", "medium", "high"],
-        default="low",
+        default="medium",
         help="Antigravity reasoning effort",
     )
     parser.add_argument(

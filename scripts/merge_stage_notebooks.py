@@ -108,15 +108,6 @@ env_missing = json.loads(env_check.stdout.strip())
 if env_missing:
     raise ModuleNotFoundError(f"zip mamba 环境缺少依赖: {env_missing}")
 
-os.environ["ZIPRC_PYTHON"] = str(ZIP_PY)
-os.environ["PATH"] = f"{Path.home() / '.local/bin'}{os.pathsep}{os.environ['PATH']}"
-
-import matplotlib.pyplot as plt
-import pandas as pd
-import psutil
-import torch
-from IPython.display import display
-
 sys.path.insert(0, str(REPO / "notebooks"))
 from ziprc_notebook_utils import (
     gate,
@@ -129,10 +120,29 @@ from ziprc_notebook_utils import (
     rolling_edges,
     run_repo,
     save_stage_report,
+    select_best_cuda_device,
 )
+
+selected_gpu = select_best_cuda_device()
+os.environ["ZIPRC_PYTHON"] = str(ZIP_PY)
+os.environ["PATH"] = f"{Path.home() / '.local/bin'}{os.pathsep}{os.environ['PATH']}"
+PROXY_URL = os.environ.get("ZIP_RC_PROXY", "http://sccpu8.cse.ust.hk:7890").strip()
+if PROXY_URL:
+    for proxy_variable in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        os.environ[proxy_variable] = PROXY_URL
+        os.environ[proxy_variable.lower()] = PROXY_URL
+    os.environ["NO_PROXY"] = ""
+    os.environ["no_proxy"] = ""
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import psutil
+import torch
+from IPython.display import display
 
 print("Repository:", REPO)
 print("ZIP Python:", ZIP_PY)
+print("Selected GPU:", selected_gpu or "unchanged")
 """
 
 AUXILIARY_COLAB_SETUP = """
@@ -154,6 +164,13 @@ elif SYNC_REPO:
     subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only", "origin", REPO_BRANCH], check=True)
 
 os.environ["PATH"] = f"{Path.home() / '.local/bin'}{os.pathsep}{os.environ['PATH']}"
+PROXY_URL = os.environ.get("ZIP_RC_PROXY", "http://sccpu8.cse.ust.hk:7890").strip()
+if PROXY_URL:
+    for proxy_variable in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        os.environ[proxy_variable] = PROXY_URL
+        os.environ[proxy_variable.lower()] = PROXY_URL
+    os.environ["NO_PROXY"] = ""
+    os.environ["no_proxy"] = ""
 AGY = Path.home() / ".local/bin/agy"
 
 import pandas as pd
@@ -161,6 +178,7 @@ from IPython.display import display
 
 print("Repository:", REPO)
 print("Expected agy path:", AGY)
+print("Proxy:", PROXY_URL or "disabled")
 """
 
 DASHBOARD = """

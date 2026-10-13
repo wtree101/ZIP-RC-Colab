@@ -58,6 +58,62 @@ def load_config(repo: Path) -> dict[str, object]:
         return json.load(handle)
 
 
+def select_best_cuda_device(min_free_gib: float = 4.0) -> str | None:
+    """Pin multi-GPU notebook jobs to the visible GPU with the most free memory."""
+    current = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if current and len([item for item in current.split(",") if item.strip()]) == 1:
+        return current
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        return None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        print(f"Could not query GPU memory; leaving CUDA_VISIBLE_DEVICES unchanged: {error}")
+        return None
+
+    allowed = None
+    if current:
+        try:
+            allowed = {int(item.strip()) for item in current.split(",") if item.strip()}
+        except ValueError:
+            print(f"Unsupported CUDA_VISIBLE_DEVICES={current!r}; leaving it unchanged.")
+            return current
+
+    devices: list[tuple[int, int]] = []
+    for line in result.stdout.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) != 2:
+            continue
+        try:
+            device_id, free_mib = int(fields[0]), int(fields[1])
+        except ValueError:
+            continue
+        if allowed is None or device_id in allowed:
+            devices.append((free_mib, device_id))
+
+    if not devices:
+        return None
+    free_mib, device_id = max(devices)
+    if free_mib < min_free_gib * 1024:
+        print(
+            f"No visible GPU has {min_free_gib:.1f} GiB free; selecting GPU {device_id} "
+            f"with {free_mib / 1024:.1f} GiB free."
+        )
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
+    return str(device_id)
+
+
 def _command_argument(command: Sequence[str], flag: str) -> str | None:
     try:
         index = command.index(flag)
@@ -104,6 +160,10 @@ def run_repo(repo: Path, *args: object) -> None:
     """Run a command from the repository root and fail on non-zero exit."""
     command = [str(arg) for arg in args]
     python_executable = os.environ.get("ZIPRC_PYTHON")
+    if not python_executable:
+        local_python = repo / ".venv" / "bin" / "python"
+        if local_python.is_file():
+            python_executable = str(local_python)
     if python_executable and command and command[0] in {"python", "python3"}:
         command[0] = python_executable
     progress_path = _command_progress_path(repo, command)
